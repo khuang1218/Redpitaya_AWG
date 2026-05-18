@@ -6,12 +6,15 @@ import redpitaya_scpi as scpi
 
 IP = "169.254.77.151"
 AMPLITUDE = 0.8
-FREQUENCY = 10_000
+FREQUENCY = 7_000
 WAVEFORM_SAMPLES = 16_384
-ACQ_READ_SAMPLES = 8_192
+ACQ_READ_SAMPLES = 16_384
 ACQ_TIMEOUT_SECONDS = 10
 DECIMATION = 1
 SAMPLE_RATE = 125_000_000 / DECIMATION
+PULSE_DURATION = 1 / FREQUENCY
+POST_PULSE_SETTLE_SECONDS = 0.005
+TRIGGER_LEVEL = 0.1
 
 
 def waveform_csv(values: np.ndarray) -> str:
@@ -94,56 +97,67 @@ def configure_generator(rp: scpi.scpi, chan: int, waveform: np.ndarray) -> None:
     rp.tx_txt(f"SOUR{chan}:TRig:SOUR INT")
 
 
-def configure_acquisition(rp: scpi.scpi) -> None:
-    """Prepare acquisition before sending the two consecutive SCPI triggers."""
+def configure_acquisition(rp: scpi.scpi, chan: int) -> None:
+    """Arm acquisition to trigger from the input channel rising edge."""
     rp.tx_txt("ACQ:RST")
     rp.tx_txt(f"ACQ:DEC:Factor {DECIMATION}")
     rp.tx_txt("ACQ:DATA:Units VOLTS")
     rp.tx_txt("ACQ:DATA:FORMAT ASCII")
+    rp.tx_txt(f"ACQ:TRig:LEV {TRIGGER_LEVEL}")
+    rp.tx_txt("ACQ:TRig:DLY 0")
     rp.tx_txt("ACQ:START")
+    rp.tx_txt(f"ACQ:TRig CH{chan}_PE")
     time.sleep(0.01)
-    rp.tx_txt("ACQ:TRig NOW")
+    if rp.txrx_txt("ACQ:TRig:STAT?") == "TD":
+        raise RuntimeError(
+            "Acquisition triggered before the output pulse was sent. "
+            "Raise TRIGGER_LEVEL or check input noise/offset."
+        )
 
 
-rp = scpi.scpi(IP, timeout=10)
+def run_pulse_cycle(rp: scpi.scpi, chan: int, waveform: np.ndarray) -> tuple[float, np.ndarray]:
+    """Upload one pulse, trigger it, let it finish, and read the captured output."""
+    configure_acquisition(rp, chan)
+
+    start = time.perf_counter()
+
+    rp.tx_txt(f"SOUR{chan}:TRAC:DATA:DATA " + waveform_csv(waveform))
+    wait_complete(rp)
+
+    rp.tx_txt(f"SOUR{chan}:TRig:INT")
+
+    # tx_txt() only sends the trigger command. It does not wait for the analog
+    # burst to finish, so we wait for the configured burst duration here.
+    time.sleep(PULSE_DURATION + POST_PULSE_SETTLE_SECONDS)
+
+    wait_for_acquisition(rp)
+    captured = read_acquisition_channel(rp, chan)
+
+    elapsed = time.perf_counter() - start
+    return elapsed, captured
+
+
+rp = scpi.scpi(IP, timeout=15)
 
 try:
-    # Use identical sharp pulses so both channels have the same crossing shape.
-    pulse_1 = sharp_pulse()
-    pulse_2 = sharp_pulse()
+    # Two sharp-edged pulse datasets, both sent consecutively through OUT1.
+    pulse_1 = sharp_pulse(width_fraction=0.1)
+    pulse_2 = sharp_pulse(width_fraction=0.2)
 
     rp.tx_txt("GEN:RST")
     configure_generator(rp, 1, pulse_1)
-    configure_generator(rp, 2, pulse_2)
     rp.tx_txt("OUTPUT:STATE ON")
     wait_complete(rp)
 
-    configure_acquisition(rp)
-
-    host_t1 = time.perf_counter()
-    rp.tx_txt("SOUR1:TRig:INT")
-    host_t2 = time.perf_counter()
-    rp.tx_txt("SOUR2:TRig:INT")
-    host_t3 = time.perf_counter()
-
-    wait_for_acquisition(rp)
-
-    ch1 = read_acquisition_channel(rp, 1)
-    ch2 = read_acquisition_channel(rp, 2)
+    cycle_1_elapsed, ch1 = run_pulse_cycle(rp, 1, pulse_1)
+    cycle_2_elapsed, ch2 = run_pulse_cycle(rp, 1, pulse_2)
 
     print(f"CH1 captured min/max: {np.min(ch1):.4f} V / {np.max(ch1):.4f} V")
-    print(f"CH2 captured min/max: {np.min(ch2):.4f} V / {np.max(ch2):.4f} V")
-
-    hardware_start_1 = first_rising_edge_time(ch1, SAMPLE_RATE)
-    hardware_start_2 = first_rising_edge_time(ch2, SAMPLE_RATE)
-
-    host_trigger_gap = host_t3 - host_t2
-    first_trigger_send_time = host_t2 - host_t1
-    hardware_delay = hardware_start_2 - hardware_start_1
-
-    print(f"Host time to send first trigger command: {first_trigger_send_time * 1e6:.1f} us")
-    print(f"Host gap between consecutive trigger sends: {host_trigger_gap * 1e6:.1f} us")
-    print(f"Hardware delay between captured rising edges: {hardware_delay * 1e9:.1f} ns")
+    print(f"Second capture min/max: {np.min(ch2):.4f} V / {np.max(ch2):.4f} V")
+    print(f"Configured pulse duration: {PULSE_DURATION * 1e6:.1f} us")
+    print(f"Cycle 1 upload + trigger + pulse + acquire/read: {cycle_1_elapsed * 1e3:.3f} ms")
+    print(f"Cycle 2 upload + trigger + pulse + acquire/read: {cycle_2_elapsed * 1e3:.3f} ms")
+    print(f"Total time for two consecutive pulse cycles: {(cycle_1_elapsed + cycle_2_elapsed) * 1e3:.3f} ms")
 
 finally:
     rp.close()
