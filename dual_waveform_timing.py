@@ -9,6 +9,7 @@ AMPLITUDE = 0.8
 FREQUENCY = 10_000
 SAMPLES = 16_384
 # Toggle this only when OUT1/OUT2 are physically looped back to IN1/IN2.
+# hello
 MEASURE_HARDWARE_SIDE = True
 ACQ_TIMEOUT_SECONDS = 10
 TIMING_UNITS = "ms"
