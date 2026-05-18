@@ -10,9 +10,9 @@ FREQUENCY = 10_000
 SAMPLES = 16_384
 # Toggle this only when OUT1/OUT2 are physically looped back to IN1/IN2.
 # hello
-MEASURE_HARDWARE_SIDE = True
+MEASURE_HARDWARE_SIDE = False
 ACQ_TIMEOUT_SECONDS = 10
-TIMING_UNITS = "ms"
+ACQ_READ_SAMPLES = 8_192
 
 
 def waveform_csv(values: np.ndarray) -> str:
@@ -20,11 +20,18 @@ def waveform_csv(values: np.ndarray) -> str:
     return ",".join(f"{value:.5f}" for value in values)
 
 
-def first_crossing_time(signal: np.ndarray, sample_rate: float, threshold: float = 0.1) -> float:
-    """Return the first positive threshold crossing time in seconds."""
+def first_crossing_time(signal: np.ndarray, sample_rate: float, threshold: float | None = None) -> float:
+    """Return the first rising crossing time in seconds."""
+    if threshold is None:
+        threshold = (float(np.min(signal)) + float(np.max(signal))) / 2
+
     crossings = np.flatnonzero((signal[:-1] < threshold) & (signal[1:] >= threshold))
     if len(crossings) == 0:
-        raise RuntimeError("No rising threshold crossing found. Check wiring/threshold.")
+        raise RuntimeError(
+            "No rising threshold crossing found. "
+            f"threshold={threshold:.4f}, min={np.min(signal):.4f}, max={np.max(signal):.4f}. "
+            "Check wiring, output amplitude, input range, or capture timing."
+        )
     return crossings[0] / sample_rate
 
 
@@ -50,6 +57,14 @@ def wait_for_acquisition(timeout_s: float = ACQ_TIMEOUT_SECONDS) -> None:
         time.sleep(0.001)
 
     raise TimeoutError("Acquisition buffer did not fill before timeout.")
+
+
+def read_acquisition_channel(chan: int, num_samples: int = ACQ_READ_SAMPLES) -> np.ndarray:
+    """Read acquisition data immediately after the data query."""
+    rp.tx_txt(f"ACQ:SOUR{chan}:DATA:STArt:N? 0,{num_samples}")
+    raw = rp.rx_txt()
+    values = raw.strip("{}\n\r").replace("  ", "").split(",")
+    return np.array(values, dtype=np.float64)
 
 
 def send_dataset_and_trigger(chan: int, waveform: np.ndarray) -> float:
@@ -100,7 +115,7 @@ wait_complete()
 # This includes Python time, TCP/network delay, SCPI parsing, waveform upload,
 # and waiting for Red Pitaya command completion.
 dataset_1_elapsed = send_dataset_and_trigger(1, waveform_1)
-dataset_2_elapsed = send_dataset_and_trigger(2, waveform_2)
+dataset_2_elapsed = send_dataset_and_trigger(1, waveform_2)
 
 print(f"Dataset 1 upload + trigger elapsed: {dataset_1_elapsed * 1e3:.3f} ms")
 print(f"Dataset 2 upload + trigger elapsed: {dataset_2_elapsed * 1e3:.3f} ms")
@@ -126,8 +141,11 @@ if MEASURE_HARDWARE_SIDE:
     rp.tx_txt("SOUR2:TRig:INT")
     wait_for_acquisition()
 
-    ch1 = rp.acq_data(1)
-    ch2 = rp.acq_data(2)
+    ch1 = read_acquisition_channel(1)
+    ch2 = read_acquisition_channel(2)
+
+    print(f"CH1 captured min/max: {np.min(ch1):.4f} V / {np.max(ch1):.4f} V")
+    print(f"CH2 captured min/max: {np.min(ch2):.4f} V / {np.max(ch2):.4f} V")
 
     start_1 = first_crossing_time(ch1, sample_rate)
     start_2 = first_crossing_time(ch2, sample_rate)
