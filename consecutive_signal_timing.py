@@ -1,5 +1,6 @@
 import time
 
+import matplotlib.pyplot as plt
 import numpy as np
 import redpitaya_scpi as scpi
 
@@ -158,6 +159,30 @@ try:
     print(f"Cycle 1 upload + trigger + pulse + acquire/read: {cycle_1_elapsed * 1e3:.3f} ms")
     print(f"Cycle 2 upload + trigger + pulse + acquire/read: {cycle_2_elapsed * 1e3:.3f} ms")
     print(f"Total time for two consecutive pulse cycles: {(cycle_1_elapsed + cycle_2_elapsed) * 1e3:.3f} ms")
+
+    waveform_time_us = np.arange(WAVEFORM_SAMPLES) / (WAVEFORM_SAMPLES * FREQUENCY) * 1e6
+    capture_time_us = np.arange(len(ch1)) / SAMPLE_RATE * 1e6
+
+    _, axes = plt.subplots(2, 1, sharex=False)
+
+    axes[0].plot(waveform_time_us, pulse_1 * AMPLITUDE, label="Original pulse 1")
+    axes[0].plot(waveform_time_us, pulse_2 * AMPLITUDE, label="Original pulse 2")
+    axes[0].set_title("Original AWG Waveforms")
+    axes[0].set_xlabel("Time (us)")
+    axes[0].set_ylabel("Voltage (V)")
+    axes[0].grid(True)
+    axes[0].legend()
+
+    axes[1].plot(capture_time_us, ch1, label="Cycle 1 capture")
+    axes[1].plot(capture_time_us, ch2, label="Cycle 2 capture")
+    axes[1].set_title("Captured Output Signals")
+    axes[1].set_xlabel("Time (us)")
+    axes[1].set_ylabel("Voltage (V)")
+    axes[1].grid(True)
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.show()
 
 finally:
     rp.close()
