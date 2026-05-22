@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import redpitaya_scpi as scpi
 
-IP = "169.254.77.151"       # 'rp-f066c8.local'
+IP = "169.254.202.253"       # 'rp-f066c8.local'
 rp = scpi.scpi(IP)
 
 wave_form = 'sine'
@@ -30,12 +30,12 @@ rp.tx_txt('SOUR1:BURS:NCYC ' + str(burst_cycles))            # 3 periods in each
 
 ##### Acqusition #####
 rp.tx_txt('ACQ:DEC 1')
-rp.tx_txt('ACQ:TRig:LEV 0')
-rp.tx_txt('ACQ:TRig:DLY 0')
+rp.tx_txt('ACQ:TRig:LEV 0.02')
+rp.tx_txt('ACQ:TRig:DLY 8192')
 
 rp.tx_txt('ACQ:START')
 time.sleep(1)
-rp.tx_txt('ACQ:TRig AWG_PE')
+rp.tx_txt('ACQ:TRig CH1_PE')
 rp.tx_txt('OUTPUT1:STATE ON')
 time.sleep(1)
 
